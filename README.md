@@ -44,6 +44,66 @@ az account set --subscription "<SUBSCRIPTION_ID>"
 az account show
 ```
 
+## Secrets GitHub Actions pour Terraform
+
+Le workflow Terraform utilise ces secrets GitHub :
+
+- `ARM_CLIENT_ID`
+- `ARM_CLIENT_SECRET`
+- `ARM_SUBSCRIPTION_ID`
+- `ARM_TENANT_ID`
+
+Ajout dans GitHub : `Settings > Secrets and variables > Actions > New repository secret`.
+
+### Option 1 (recommandée) : créer un Service Principal dédié CI
+
+```bash
+# Choisir la souscription cible
+az account set --subscription "<SUBSCRIPTION_ID>"
+
+# Créer le Service Principal + role Contributor sur la souscription
+az ad sp create-for-rbac \
+  --name "sp-terraform-gha" \
+  --role Contributor \
+  --scopes /subscriptions/<SUBSCRIPTION_ID>
+```
+
+La commande retourne un JSON contenant :
+
+- `appId` -> `ARM_CLIENT_ID`
+- `password` -> `ARM_CLIENT_SECRET`
+- `tenant` -> `ARM_TENANT_ID`
+
+Puis récupérer l'ID de souscription :
+
+```bash
+az account show --query id -o tsv
+```
+
+Valeur à enregistrer dans `ARM_SUBSCRIPTION_ID`.
+
+### Option 2 : réutiliser un Service Principal existant
+
+```bash
+# ARM_CLIENT_ID
+az ad sp list --display-name "<SP_NAME>" --query "[0].appId" -o tsv
+
+# ARM_TENANT_ID
+az account show --query tenantId -o tsv
+
+# ARM_SUBSCRIPTION_ID
+az account show --query id -o tsv
+```
+
+Pour `ARM_CLIENT_SECRET`, la valeur existante n'est pas lisible dans Azure AD.
+Il faut créer un nouveau secret :
+
+```bash
+az ad app credential reset --id <APP_ID> --display-name "github-actions" --append
+```
+
+La sortie contient `password` : c'est la valeur de `ARM_CLIENT_SECRET`.
+
 ## Structure du projet
 
 ```

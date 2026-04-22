@@ -3,37 +3,44 @@ name: terraform
 on:
   pull_request:
     paths:
-      - "terraform/*.tf"
-      - "terraform/**/*.tf"
-      - "terraform/cloud-init/**"
-      - "terraform/scripts/**"
+      - "*.tf"
+      - "cloud-init/**"
+      - "scripts/**"
       - ".github/workflows/terraform.yml"
   push:
     branches:
-      - main
+      - master
     paths:
-      - "terraform/*.tf"
-      - "terraform/**/*.tf"
-      - "terraform/cloud-init/**"
-      - "terraform/scripts/**"
+      - "*.tf"
+      - "cloud-init/**"
+      - "scripts/**"
       - ".github/workflows/terraform.yml"
   workflow_dispatch:
     inputs:
-      run_hardening:
-        description: "Run OS hardening over SSH"
+      terraform_action:
+        description: "Action Terraform a executer"
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+        default: plan
+      auto_approve:
+        description: "Auto-approve pour apply/destroy"
         required: true
         type: boolean
         default: false
-      target_hosts:
-        description: "Comma-separated public IPs or hostnames"
+      tf_vars_file:
+        description: "Fichier tfvars optionnel (ex: terraform.tfvars)"
         required: false
         type: string
-        default: "40.89.191.220,20.199.118.187,20.19.122.218"
-      ssh_user:
-        description: "SSH username used on target hosts"
+        default: ""
+      confirm_destroy:
+        description: "Tape DESTROY pour autoriser terraform destroy"
         required: false
         type: string
-        default: "adminuser"
+        default: ""
 
 concurrency:
   group: terraform-${{ github.ref }}
@@ -41,11 +48,12 @@ concurrency:
 
 jobs:
   terraform_checks:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
-        working-directory: terraform
+        working-directory: .
     env:
       TF_IN_AUTOMATION: true
       TF_INPUT: false
@@ -61,7 +69,7 @@ jobs:
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@v4
 
-      - name: Terraform Init
+      - name: Terraform Init (no backend)
         run: terraform init -backend=false -input=false
 
       - name: Terraform Fmt
@@ -75,35 +83,70 @@ jobs:
           tflint --init
           tflint -f compact
 
-  hardening:
-    if: github.event_name == 'workflow_dispatch' && inputs.run_hardening
+  terraform_pipeline:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
         working-directory: .
+    env:
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Write SSH key
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        run: |
-          test -n "$SSH_PRIVATE_KEY" || { echo "Missing SSH_PRIVATE_KEY secret"; exit 1; }
-          mkdir -p .ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > .ssh/id_rsa
-          chmod 600 .ssh/id_rsa
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
 
-      - name: Run hardening
-        env:
-          TARGET_HOSTS: ${{ inputs.target_hosts }}
-          SSH_USER: ${{ inputs.ssh_user }}
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Build tfvars argument
+        id: args
         run: |
-          test -n "$TARGET_HOSTS" || { echo "target_hosts input is required"; exit 1; }
-          IFS=',' read -ra HOSTS <<< "$TARGET_HOSTS"
-          for host in "${HOSTS[@]}"; do
-            host_trimmed="$(echo "$host" | xargs)"
-            test -n "$host_trimmed" || continue
-            bash terraform/scripts/harden-node.sh "$host_trimmed" "$SSH_USER" .ssh/id_rsa
-          done
+          if [ -n "${{ inputs.tf_vars_file }}" ]; then
+            echo "var_file_arg=-var-file=${{ inputs.tf_vars_file }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "var_file_arg=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Terraform Plan (create/update)
+        if: inputs.terraform_action == 'plan' || inputs.terraform_action == 'apply'
+        run: terraform plan ${{ steps.args.outputs.var_file_arg }} -out=tfplan
+
+      - name: Terraform Apply
+        if: inputs.terraform_action == 'apply'
+        run: |
+          if [ "${{ inputs.auto_approve }}" = "true" ]; then
+            terraform apply -auto-approve tfplan
+          else
+            terraform apply tfplan
+          fi
+
+      - name: Guardrail destroy confirmation
+        if: inputs.terraform_action == 'destroy'
+        run: |
+          if [ "${{ inputs.confirm_destroy }}" != "DESTROY" ]; then
+            echo "Destroy bloque: renseigne confirm_destroy=DESTROY"
+            exit 1
+          fi
+
+      - name: Terraform Destroy
+        if: inputs.terraform_action == 'destroy'
+        run: |
+          if [ "${{ inputs.auto_approve }}" = "true" ]; then
+            terraform destroy -auto-approve ${{ steps.args.outputs.var_file_arg }}
+          else
+            terraform destroy ${{ steps.args.outputs.var_file_arg }}
+          fi
