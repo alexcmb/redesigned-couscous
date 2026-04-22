@@ -1,0 +1,62 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+
+write_files:
+  - path: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+  - path: /etc/sysctl.d/k8s.conf
+    content: |
+      net.ipv4.ip_forward = 1
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+
+runcmd:
+  # Désactiver le swap
+  - swapoff -a
+  - sed -i '/ swap / s/^/#/' /etc/fstab
+
+  # Charger les modules noyau
+  - modprobe overlay
+  - modprobe br_netfilter
+  - sysctl --system
+
+  # Installer containerd
+  - mkdir -p /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  - echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable" | tee /etc/apt/sources.list.d/docker.list
+  - apt-get update -y
+  - apt-get install -y containerd.io
+
+  # Configurer containerd avec le cgroup driver systemd
+  - mkdir -p /etc/containerd
+  - containerd config default | tee /etc/containerd/config.toml
+  - sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
+  - systemctl daemon-reload
+  - systemctl enable --now containerd
+
+  # Installer kubeadm, kubelet, kubectl
+  - curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  - echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list
+  - apt-get update -y
+  - apt-get install -y kubelet kubeadm kubectl
+  - apt-mark hold kubelet kubeadm kubectl
+  - systemctl enable kubelet
+
+  # Attendre que l'API du control plane soit disponible
+  - until curl -sk https://${control_plane_private_ip}:6443/healthz; do sleep 5; done
+
+  # Rejoindre le cluster
+  - >
+    kubeadm join ${control_plane_private_ip}:6443
+    --token "${kubeadm_token}"
+    --discovery-token-unsafe-skip-ca-verification
+    --cri-socket=unix:///run/containerd/containerd.sock
