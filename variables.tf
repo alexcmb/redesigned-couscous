@@ -1,7 +1,7 @@
 variable "prefix" {
   description = "Préfixe utilisé pour nommer toutes les ressources"
   type        = string
-  default     = "SDV_PRD"
+  default     = "ACA"
 }
 
 variable "location" {
@@ -14,6 +14,12 @@ variable "worker_count" {
   description = "Nombre de noeuds Worker à déployer"
   type        = number
   default     = 2
+}
+
+variable "vm_size_wn" {
+  description = "Taille des machines virtuelles"
+  type        = string
+  default     = "Standard_B1ms"
 }
 
 variable "vm_size" {
