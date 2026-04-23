@@ -141,6 +141,31 @@ terraform init -migrate-state \
 
 Apres cette migration, GitHub Actions et ton poste local partageront le meme tfstate.
 
+### Clé SSH dans Azure Key Vault
+
+La clé privée SSH générée par Terraform est aussi stockée dans un Key Vault Azure dédié.
+
+Tu peux récupérer les valeurs utiles avec Terraform :
+
+```bash
+terraform output -raw ssh_key_vault_name
+terraform output -raw ssh_private_key_secret_name
+```
+
+Pour exporter la clé en local :
+
+```bash
+az keyvault secret show \
+  --vault-name "<KEY_VAULT_NAME>" \
+  --name "ssh-private-key" \
+  --query value -o tsv > ~/.ssh/id_rsa_k8s
+chmod 600 ~/.ssh/id_rsa_k8s
+```
+
+Avec GitHub Actions, le même Service Principal utilisé pour Terraform peut lire ce secret si le workflow s'authentifie avec les secrets `ARM_*`.
+
+Le tfstate contient toujours la ressource `tls_private_key`, donc le Key Vault sert surtout à éviter de dépendre du state pour consommer la clé côté CI/CD.
+
 ## Déploiements avec GitHub Actions
 
 Le workflow [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml) fonctionne maintenant en 3 modes :

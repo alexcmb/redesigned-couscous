@@ -14,6 +14,16 @@ output "ssh_private_key" {
   sensitive   = true
 }
 
+output "ssh_key_vault_name" {
+  description = "Nom du Key Vault qui stocke la clé SSH privée"
+  value       = azurerm_key_vault.ssh.name
+}
+
+output "ssh_private_key_secret_name" {
+  description = "Nom du secret Key Vault qui stocke la clé SSH privée"
+  value       = azurerm_key_vault_secret.ssh_private_key.name
+}
+
 output "ssh_command_cp" {
   description = "Commande pour se connecter en SSH au Control Plane"
   value       = "ssh -i id_rsa ${var.admin_username}@${azurerm_public_ip.cp_pip.ip_address}"
