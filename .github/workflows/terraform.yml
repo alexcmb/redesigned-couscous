@@ -212,9 +212,4 @@ jobs:
 
       - name: Terraform Destroy
         if: inputs.terraform_action == 'destroy'
-        run: |
-          if [ "${{ inputs.auto_approve }}" = "true" ]; then
-            terraform destroy -auto-approve ${{ steps.args.outputs.var_file_arg }}
-          else
-            terraform destroy ${{ steps.args.outputs.var_file_arg }}
-          fi
+        run: terraform destroy -auto-approve ${{ steps.args.outputs.var_file_arg }}
