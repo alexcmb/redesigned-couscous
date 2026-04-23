@@ -56,12 +56,6 @@ resource "azurerm_linux_virtual_machine" "cp_vm" {
     version   = "latest"
   }
 
-  custom_data = base64encode(templatefile("${path.module}/cloud-init/control-plane.yaml", {
-    kubeadm_token            = local.kubeadm_token
-    control_plane_private_ip = azurerm_network_interface.cp_nic.private_ip_address
-    admin_username           = var.admin_username
-    pod_network_cidr         = var.pod_network_cidr
-  }))
 }
 
 # --- WORKERS ---
@@ -118,11 +112,6 @@ resource "azurerm_linux_virtual_machine" "worker_vm" {
     sku       = "22_04-lts"
     version   = "latest"
   }
-
-  custom_data = base64encode(templatefile("${path.module}/cloud-init/worker.yaml", {
-    kubeadm_token            = local.kubeadm_token
-    control_plane_private_ip = azurerm_network_interface.cp_nic.private_ip_address
-  }))
 
   depends_on = [
     azurerm_linux_virtual_machine.cp_vm

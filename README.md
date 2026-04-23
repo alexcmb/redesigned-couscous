@@ -189,8 +189,12 @@ La branche `dev` sert de branche de test pour valider les changements avant de l
 Si tu veux uniquement tester le plan sans appliquer, lance le workflow en `workflow_dispatch` avec `terraform_action = plan`.
 
 Une fois le workflow Terraform terminé avec succès sur `push` ou `apply`, un second workflow [`.github/workflows/ansible-hardening.yml`](.github/workflows/ansible-hardening.yml) s’exécute automatiquement.
-Il installe Ansible sur le runner, reconstruit un inventaire temporaire à partir des outputs Terraform, puis lance le playbook [ansible/playbooks/harden-vms.yml](ansible/playbooks/harden-vms.yml).
-Ce playbook reprend la logique du script [scripts/harden-node.sh](scripts/harden-node.sh) pour installer `fail2ban`, `auditd` et durcir `sshd` sur les VMs déjà créées.
+Il installe Ansible sur le runner, reconstruit un inventaire temporaire à partir des outputs Terraform, puis lance deux playbooks :
+
+- [ansible/playbooks/bootstrap-k8s.yml](ansible/playbooks/bootstrap-k8s.yml) : installation des prerequis Kubernetes, init du control plane (`kubeadm init`), deployment Flannel, puis `kubeadm join` des workers.
+- [ansible/playbooks/harden-vms.yml](ansible/playbooks/harden-vms.yml) : durcissement SSH, `fail2ban`, `auditd`.
+
+Le bootstrap Kubernetes n'est donc plus applique via cloud-init sur les VMs.
 
 ## Structure du projet
 
@@ -201,9 +205,10 @@ terraform/
 ├── outputs.tf                 # Sorties (IPs, kubeconfig, clé SSH)
 ├── network.tf                 # VNet, Subnet, NSG
 ├── compute.tf                 # VMs control plane et workers
-└── cloud-init/
-    ├── control-plane.yaml     # Bootstrap kubeadm init + Flannel
-    └── worker.yaml            # Bootstrap kubeadm join
+└── ansible/
+  └── playbooks/
+    ├── bootstrap-k8s.yml  # Bootstrap Kubernetes (kubeadm + flannel + join workers)
+    └── harden-vms.yml     # Durcissement OS/SSH
 ```
 
 ## Variables
@@ -262,7 +267,7 @@ terraform apply
 terraform apply tfplan
 ```
 
-Le déploiement dure environ **5–8 minutes** (provisioning Azure + cloud-init kubeadm).
+Le déploiement dure environ **8-12 minutes** (provisioning Azure + bootstrap Ansible Kubernetes).
 
 ### 5. Récupérer les outputs
 
@@ -326,10 +331,6 @@ kubectl get nodes
 # Sur le control plane
 sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes -o wide
 sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get pods -A
-
-# Vérifier le cloud-init
-sudo cloud-init status --wait
-sudo tail -100 /var/log/cloud-init-output.log
 
 # Vérifier les services
 sudo systemctl status kubelet containerd
