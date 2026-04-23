@@ -54,6 +54,12 @@
         state: present
         update_cache: true
 
+    - name: Ensure containerd config directory exists
+      ansible.builtin.file:
+        path: /etc/containerd
+        state: directory
+        mode: '0755'
+
     - name: Generate default containerd config if missing
       ansible.builtin.shell: |
         if [ ! -f /etc/containerd/config.toml ]; then
