@@ -129,6 +129,29 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
 
+      - name: Import existing bootstrap resources
+        run: |
+          rg_id="/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${TFSTATE_RESOURCE_GROUP_NAME}"
+          sa_id="/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${TFSTATE_RESOURCE_GROUP_NAME}/providers/Microsoft.Storage/storageAccounts/${TFSTATE_STORAGE_ACCOUNT_NAME}"
+          container_id="https://${TFSTATE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${TFSTATE_CONTAINER_NAME}"
+          sa_suffix="${TFSTATE_STORAGE_ACCOUNT_NAME#${TFSTATE_STORAGE_ACCOUNT_NAME%%tfstate*}tfstate}"
+
+          if ! terraform state show azurerm_resource_group.rg >/dev/null 2>&1; then
+            terraform import azurerm_resource_group.rg "$rg_id"
+          fi
+
+          if ! terraform state show azurerm_storage_account.tfstate >/dev/null 2>&1; then
+            terraform import azurerm_storage_account.tfstate "$sa_id"
+          fi
+
+          if ! terraform state show azurerm_storage_container.tfstate >/dev/null 2>&1; then
+            terraform import azurerm_storage_container.tfstate "$container_id"
+          fi
+
+          if ! terraform state show random_string.tfstate_sa_suffix >/dev/null 2>&1; then
+            terraform import random_string.tfstate_sa_suffix "$sa_suffix"
+          fi
+
       - name: Terraform Plan
         run: terraform plan -out=tfplan
 
@@ -179,6 +202,29 @@ jobs:
 
       - name: Terraform Validate
         run: terraform validate
+
+      - name: Import existing bootstrap resources
+        run: |
+          rg_id="/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${TFSTATE_RESOURCE_GROUP_NAME}"
+          sa_id="/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${TFSTATE_RESOURCE_GROUP_NAME}/providers/Microsoft.Storage/storageAccounts/${TFSTATE_STORAGE_ACCOUNT_NAME}"
+          container_id="https://${TFSTATE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${TFSTATE_CONTAINER_NAME}"
+          sa_suffix="${TFSTATE_STORAGE_ACCOUNT_NAME#${TFSTATE_STORAGE_ACCOUNT_NAME%%tfstate*}tfstate}"
+
+          if ! terraform state show azurerm_resource_group.rg >/dev/null 2>&1; then
+            terraform import azurerm_resource_group.rg "$rg_id"
+          fi
+
+          if ! terraform state show azurerm_storage_account.tfstate >/dev/null 2>&1; then
+            terraform import azurerm_storage_account.tfstate "$sa_id"
+          fi
+
+          if ! terraform state show azurerm_storage_container.tfstate >/dev/null 2>&1; then
+            terraform import azurerm_storage_container.tfstate "$container_id"
+          fi
+
+          if ! terraform state show random_string.tfstate_sa_suffix >/dev/null 2>&1; then
+            terraform import random_string.tfstate_sa_suffix "$sa_suffix"
+          fi
 
       - name: Build tfvars argument
         id: args
