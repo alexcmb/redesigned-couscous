@@ -247,6 +247,14 @@ jobs:
         with:
           name: tfplan
 
+      - name: Rebuild fresh plan
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.terraform_action }}" = "destroy" ]; then
+            terraform plan -destroy ${{ steps.args.outputs.var_file_arg }} -out=tfplan
+          else
+            terraform plan ${{ steps.args.outputs.var_file_arg }} -out=tfplan
+          fi
+
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
 
