@@ -1,0 +1,138 @@
+---
+- name: Deploy observability stack (ingress-nginx + Prometheus + Grafana)
+  hosts: control_plane
+  become: true
+  gather_facts: false
+
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    helm_version: "v3.17.3"
+    helm_install_dir: /usr/local/bin
+    ingress_nginx_chart_version: "4.12.1"
+    kube_prometheus_stack_chart_version: "70.4.2"
+
+  pre_tasks:
+    - name: Wait for SSH to become available
+      ansible.builtin.wait_for_connection:
+        delay: 5
+        timeout: 120
+
+  tasks:
+    - name: Check if Helm is already installed
+      ansible.builtin.stat:
+        path: "{{ helm_install_dir }}/helm"
+      register: helm_binary
+
+    - name: Download Helm installer
+      ansible.builtin.get_url:
+        url: "https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3"
+        dest: /tmp/get-helm.sh
+        mode: '0700'
+      when: not helm_binary.stat.exists
+
+    - name: Install Helm {{ helm_version }}
+      ansible.builtin.command:
+        cmd: /tmp/get-helm.sh
+      environment:
+        DESIRED_VERSION: "{{ helm_version }}"
+      when: not helm_binary.stat.exists
+      changed_when: true
+
+    - name: Add ingress-nginx Helm repo
+      ansible.builtin.command:
+        cmd: helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: false
+
+    - name: Add prometheus-community Helm repo
+      ansible.builtin.command:
+        cmd: helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: false
+
+    - name: Update Helm repos
+      ansible.builtin.command:
+        cmd: helm repo update
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: false
+
+    - name: Create ingress-nginx namespace
+      ansible.builtin.command:
+        cmd: kubectl create namespace ingress-nginx --dry-run=client -o yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: ns_ingress_yaml
+      changed_when: false
+
+    - name: Apply ingress-nginx namespace
+      ansible.builtin.shell:
+        cmd: "kubectl create namespace ingress-nginx --dry-run=client -o yaml | kubectl apply -f -"
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: true
+
+    - name: Create monitoring namespace
+      ansible.builtin.shell:
+        cmd: "kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -"
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: true
+
+    - name: Copy ingress-nginx values to remote
+      ansible.builtin.copy:
+        src: ../../helm/values/ingress-nginx.yaml
+        dest: /tmp/ingress-nginx-values.yaml
+        mode: '0644'
+
+    - name: Deploy ingress-nginx
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx
+          --namespace ingress-nginx
+          --version {{ ingress_nginx_chart_version }}
+          --values /tmp/ingress-nginx-values.yaml
+          --wait --timeout 5m
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: true
+
+    - name: Copy kube-prometheus-stack values to remote
+      ansible.builtin.copy:
+        src: ../../helm/values/kube-prometheus-stack.yaml
+        dest: /tmp/kube-prometheus-stack-values.yaml
+        mode: '0644'
+
+    - name: Deploy kube-prometheus-stack
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack
+          --namespace monitoring
+          --version {{ kube_prometheus_stack_chart_version }}
+          --values /tmp/kube-prometheus-stack-values.yaml
+          --set grafana.adminPassword={{ grafana_admin_password }}
+          --wait --timeout 10m
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: true
+      no_log: true
+
+    - name: Get Grafana NodePort (fallback access without DNS)
+      ansible.builtin.shell:
+        cmd: >
+          kubectl get svc -n monitoring kube-prometheus-stack-grafana
+          -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "no-nodeport"
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: grafana_nodeport
+      changed_when: false
+
+    - name: Print access summary
+      ansible.builtin.debug:
+        msg:
+          - "ingress-nginx HTTP  → http://<CP_IP>:30080"
+          - "ingress-nginx HTTPS → https://<CP_IP>:30443"
+          - "Grafana via Ingress → http://<CP_IP>:30080 (Host: grafana.local)"
+          - "Grafana NodePort    → {{ grafana_nodeport.stdout }}"
