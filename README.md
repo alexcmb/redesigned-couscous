@@ -188,6 +188,10 @@ La branche `dev` sert de branche de test pour valider les changements avant de l
 
 Si tu veux uniquement tester le plan sans appliquer, lance le workflow en `workflow_dispatch` avec `terraform_action = plan`.
 
+Une fois le workflow Terraform terminé avec succès sur `push` ou `apply`, un second workflow [`.github/workflows/ansible-hardening.yml`](.github/workflows/ansible-hardening.yml) s’exécute automatiquement.
+Il installe Ansible sur le runner, reconstruit un inventaire temporaire à partir des outputs Terraform, puis lance le playbook [ansible/playbooks/harden-vms.yml](ansible/playbooks/harden-vms.yml).
+Ce playbook reprend la logique du script [scripts/harden-node.sh](scripts/harden-node.sh) pour installer `fail2ban`, `auditd` et durcir `sshd` sur les VMs déjà créées.
+
 ## Structure du projet
 
 ```

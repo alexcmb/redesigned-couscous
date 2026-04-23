@@ -1,4 +1,5 @@
 name: terraform
+run-name: terraform - ${{ github.event_name == 'workflow_dispatch' && inputs.terraform_action || github.event_name }}
 
 on:
   pull_request:
