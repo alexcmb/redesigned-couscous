@@ -42,8 +42,32 @@ resource "azurerm_network_security_group" "nsg" {
   }
 
   security_rule {
-    name                       = "AllowInternal"
+    name                       = "IngressHTTP"
     priority                   = 1003
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "30080"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "IngressHTTPS"
+    priority                   = 1004
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "30443"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "AllowInternal"
+    priority                   = 1005
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "*"
