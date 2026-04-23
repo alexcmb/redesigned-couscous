@@ -213,3 +213,11 @@ jobs:
       - name: Terraform Destroy
         if: inputs.terraform_action == 'destroy'
         run: terraform destroy -auto-approve ${{ steps.args.outputs.var_file_arg }}
+
+      - name: Upload errored state artifact
+        if: failure() && inputs.terraform_action == 'destroy'
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-errored-state
+          path: errored.*
+          if-no-files-found: ignore
