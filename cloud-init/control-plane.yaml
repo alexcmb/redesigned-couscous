@@ -51,7 +51,7 @@ runcmd:
   - apt-mark hold kubelet kubeadm kubectl
   - systemctl enable kubelet
 
-  # Initialiser le control plane
+  # Initialiser le control plane Kubernetes
   - >
     kubeadm init
     --token "${kubeadm_token}"
