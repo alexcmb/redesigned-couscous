@@ -1,0 +1,52 @@
+grafana:
+  adminPassword: ""  # overridden at deploy time via --set
+
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - grafana.local
+    paths:
+      - /
+
+  # No PVC — no default StorageClass on bare-metal kubeadm
+  persistence:
+    enabled: false
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+prometheus:
+  prometheusSpec:
+    # No PVC — disable persistence until a StorageClass is configured
+    storageSpec: {}
+    retention: 7d
+
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+
+    # Allow scraping all namespaces
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+
+alertmanager:
+  alertmanagerSpec:
+    storage: {}
+
+# Disable components not needed for a first deployment
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
