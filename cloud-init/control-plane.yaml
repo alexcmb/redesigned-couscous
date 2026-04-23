@@ -42,6 +42,16 @@ runcmd:
   - sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
   - systemctl daemon-reload
   - systemctl enable --now containerd
+  - mkdir -p /etc
+  - |
+    cat >/etc/crictl.yaml <<'EOF'
+    runtime-endpoint: unix:///run/containerd/containerd.sock
+    image-endpoint: unix:///run/containerd/containerd.sock
+    timeout: 10
+    debug: false
+    EOF
+  - systemctl restart containerd
+  - until crictl info >/dev/null 2>&1; do sleep 5; done
 
   # Installer kubeadm, kubelet, kubectl
   - curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
