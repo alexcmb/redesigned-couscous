@@ -6,7 +6,6 @@ on:
     paths:
       - "*.tf"
       - "cloud-init/**"
-      - "scripts/**"
       - ".github/workflows/terraform.yml"
   push:
     branches:
@@ -15,7 +14,6 @@ on:
     paths:
       - "*.tf"
       - "cloud-init/**"
-      - "scripts/**"
       - ".github/workflows/terraform.yml"
   workflow_dispatch:
     inputs:
