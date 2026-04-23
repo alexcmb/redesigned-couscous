@@ -27,11 +27,6 @@ on:
           - apply
           - destroy
         default: plan
-      auto_approve:
-        description: "Auto-approve pour apply/destroy"
-        required: true
-        type: boolean
-        default: false
       tf_vars_file:
         description: "Fichier tfvars optionnel (ex: terraform.tfvars)"
         required: false
@@ -49,7 +44,7 @@ concurrency:
 
 jobs:
   terraform_checks:
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -84,8 +79,8 @@ jobs:
           tflint --init
           tflint -f compact
 
-  terraform_deploy:
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/dev')
+  terraform_plan:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -134,134 +129,213 @@ jobs:
           rg_id="/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${TFSTATE_RESOURCE_GROUP_NAME}"
           sa_id="/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${TFSTATE_RESOURCE_GROUP_NAME}/providers/Microsoft.Storage/storageAccounts/${TFSTATE_STORAGE_ACCOUNT_NAME}"
           container_id="https://${TFSTATE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${TFSTATE_CONTAINER_NAME}"
-          sa_suffix="${TFSTATE_STORAGE_ACCOUNT_NAME#${TFSTATE_STORAGE_ACCOUNT_NAME%%tfstate*}tfstate}"
+          sa_suffix="${TFSTATE_STORAGE_ACCOUNT_NAME##*tfstate}"
 
-          if ! terraform state show azurerm_resource_group.rg >/dev/null 2>&1; then
+          if ! terraform state list | grep -qx 'azurerm_resource_group.rg'; then
             terraform import azurerm_resource_group.rg "$rg_id"
           fi
 
-          if ! terraform state show azurerm_storage_account.tfstate >/dev/null 2>&1; then
+          if ! terraform state list | grep -qx 'azurerm_storage_account.tfstate'; then
             terraform import azurerm_storage_account.tfstate "$sa_id"
           fi
 
-          if ! terraform state show azurerm_storage_container.tfstate >/dev/null 2>&1; then
+          if ! terraform state list | grep -qx 'azurerm_storage_container.tfstate'; then
             terraform import azurerm_storage_container.tfstate "$container_id"
           fi
 
-          if ! terraform state show random_string.tfstate_sa_suffix >/dev/null 2>&1; then
-            terraform import random_string.tfstate_sa_suffix "$sa_suffix"
-          fi
-
-      - name: Terraform Plan
-        run: terraform plan -out=tfplan
-
-      - name: Terraform Apply
-        run: terraform apply -auto-approve tfplan
-
-  terraform_pipeline:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-        working-directory: .
-    env:
-      TF_IN_AUTOMATION: true
-      TF_INPUT: false
-      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
-      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
-      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
-      TFSTATE_RESOURCE_GROUP_NAME: ${{ secrets.TFSTATE_RESOURCE_GROUP_NAME }}
-      TFSTATE_STORAGE_ACCOUNT_NAME: ${{ secrets.TFSTATE_STORAGE_ACCOUNT_NAME }}
-      TFSTATE_CONTAINER_NAME: ${{ secrets.TFSTATE_CONTAINER_NAME }}
-      TFSTATE_KEY: ${{ secrets.TFSTATE_KEY }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
-
-      - name: Validate backend secrets
-        run: |
-          test -n "$TFSTATE_RESOURCE_GROUP_NAME" || { echo "Missing secret TFSTATE_RESOURCE_GROUP_NAME"; exit 1; }
-          test -n "$TFSTATE_STORAGE_ACCOUNT_NAME" || { echo "Missing secret TFSTATE_STORAGE_ACCOUNT_NAME"; exit 1; }
-          test -n "$TFSTATE_CONTAINER_NAME" || { echo "Missing secret TFSTATE_CONTAINER_NAME"; exit 1; }
-          test -n "$TFSTATE_KEY" || { echo "Missing secret TFSTATE_KEY"; exit 1; }
-
-      - name: Terraform Init
-        run: |
-          terraform init -input=false \
-            -backend-config="resource_group_name=${TFSTATE_RESOURCE_GROUP_NAME}" \
-            -backend-config="storage_account_name=${TFSTATE_STORAGE_ACCOUNT_NAME}" \
-            -backend-config="container_name=${TFSTATE_CONTAINER_NAME}" \
-            -backend-config="key=${TFSTATE_KEY}"
-
-      - name: Terraform Validate
-        run: terraform validate
-
-      - name: Import existing bootstrap resources
-        run: |
-          rg_id="/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${TFSTATE_RESOURCE_GROUP_NAME}"
-          sa_id="/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${TFSTATE_RESOURCE_GROUP_NAME}/providers/Microsoft.Storage/storageAccounts/${TFSTATE_STORAGE_ACCOUNT_NAME}"
-          container_id="https://${TFSTATE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${TFSTATE_CONTAINER_NAME}"
-          sa_suffix="${TFSTATE_STORAGE_ACCOUNT_NAME#${TFSTATE_STORAGE_ACCOUNT_NAME%%tfstate*}tfstate}"
-
-          if ! terraform state show azurerm_resource_group.rg >/dev/null 2>&1; then
-            terraform import azurerm_resource_group.rg "$rg_id"
-          fi
-
-          if ! terraform state show azurerm_storage_account.tfstate >/dev/null 2>&1; then
-            terraform import azurerm_storage_account.tfstate "$sa_id"
-          fi
-
-          if ! terraform state show azurerm_storage_container.tfstate >/dev/null 2>&1; then
-            terraform import azurerm_storage_container.tfstate "$container_id"
-          fi
-
-          if ! terraform state show random_string.tfstate_sa_suffix >/dev/null 2>&1; then
+          if ! terraform state list | grep -qx 'random_string.tfstate_sa_suffix'; then
             terraform import random_string.tfstate_sa_suffix "$sa_suffix"
           fi
 
       - name: Build tfvars argument
         id: args
         run: |
-          if [ -n "${{ inputs.tf_vars_file }}" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tf_vars_file }}" ]; then
             echo "var_file_arg=-var-file=${{ inputs.tf_vars_file }}" >> "$GITHUB_OUTPUT"
           else
             echo "var_file_arg=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Terraform Plan (create/update)
-        if: inputs.terraform_action == 'plan' || inputs.terraform_action == 'apply'
-        run: terraform plan ${{ steps.args.outputs.var_file_arg }} -out=tfplan
-
-      - name: Terraform Apply
-        if: inputs.terraform_action == 'apply'
+      - name: Terraform Plan
         run: |
-          if [ "${{ inputs.auto_approve }}" = "true" ]; then
-            terraform apply -auto-approve tfplan
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.terraform_action }}" = "destroy" ]; then
+            terraform plan -destroy ${{ steps.args.outputs.var_file_arg }} -out=tfplan
           else
-            terraform apply tfplan
+            terraform plan ${{ steps.args.outputs.var_file_arg }} -out=tfplan
           fi
 
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: tfplan
+          if-no-files-found: error
+
+  terraform_apply:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.terraform_action == 'apply')
+    needs: terraform_plan
+    runs-on: ubuntu-latest
+    environment: terraform-apply
+    defaults:
+      run:
+        shell: bash
+        working-directory: .
+    env:
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+      TFSTATE_RESOURCE_GROUP_NAME: ${{ secrets.TFSTATE_RESOURCE_GROUP_NAME }}
+      TFSTATE_STORAGE_ACCOUNT_NAME: ${{ secrets.TFSTATE_STORAGE_ACCOUNT_NAME }}
+      TFSTATE_CONTAINER_NAME: ${{ secrets.TFSTATE_CONTAINER_NAME }}
+      TFSTATE_KEY: ${{ secrets.TFSTATE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Validate backend secrets
+        run: |
+          test -n "$TFSTATE_RESOURCE_GROUP_NAME" || { echo "Missing secret TFSTATE_RESOURCE_GROUP_NAME"; exit 1; }
+          test -n "$TFSTATE_STORAGE_ACCOUNT_NAME" || { echo "Missing secret TFSTATE_STORAGE_ACCOUNT_NAME"; exit 1; }
+          test -n "$TFSTATE_CONTAINER_NAME" || { echo "Missing secret TFSTATE_CONTAINER_NAME"; exit 1; }
+          test -n "$TFSTATE_KEY" || { echo "Missing secret TFSTATE_KEY"; exit 1; }
+
+      - name: Terraform Init
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${TFSTATE_RESOURCE_GROUP_NAME}" \
+            -backend-config="storage_account_name=${TFSTATE_STORAGE_ACCOUNT_NAME}" \
+            -backend-config="container_name=${TFSTATE_CONTAINER_NAME}" \
+            -backend-config="key=${TFSTATE_KEY}"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Import existing bootstrap resources
+        run: |
+          rg_id="/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${TFSTATE_RESOURCE_GROUP_NAME}"
+          sa_id="/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${TFSTATE_RESOURCE_GROUP_NAME}/providers/Microsoft.Storage/storageAccounts/${TFSTATE_STORAGE_ACCOUNT_NAME}"
+          container_id="https://${TFSTATE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${TFSTATE_CONTAINER_NAME}"
+          sa_suffix="${TFSTATE_STORAGE_ACCOUNT_NAME##*tfstate}"
+
+          if ! terraform state list | grep -qx 'azurerm_resource_group.rg'; then
+            terraform import azurerm_resource_group.rg "$rg_id"
+          fi
+
+          if ! terraform state list | grep -qx 'azurerm_storage_account.tfstate'; then
+            terraform import azurerm_storage_account.tfstate "$sa_id"
+          fi
+
+          if ! terraform state list | grep -qx 'azurerm_storage_container.tfstate'; then
+            terraform import azurerm_storage_container.tfstate "$container_id"
+          fi
+
+          if ! terraform state list | grep -qx 'random_string.tfstate_sa_suffix'; then
+            terraform import random_string.tfstate_sa_suffix "$sa_suffix"
+          fi
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+
+  terraform_destroy:
+    if: github.event_name == 'workflow_dispatch' && inputs.terraform_action == 'destroy'
+    needs: terraform_plan
+    runs-on: ubuntu-latest
+    environment: terraform-destroy
+    defaults:
+      run:
+        shell: bash
+        working-directory: .
+    env:
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+      TFSTATE_RESOURCE_GROUP_NAME: ${{ secrets.TFSTATE_RESOURCE_GROUP_NAME }}
+      TFSTATE_STORAGE_ACCOUNT_NAME: ${{ secrets.TFSTATE_STORAGE_ACCOUNT_NAME }}
+      TFSTATE_CONTAINER_NAME: ${{ secrets.TFSTATE_CONTAINER_NAME }}
+      TFSTATE_KEY: ${{ secrets.TFSTATE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
       - name: Guardrail destroy confirmation
-        if: inputs.terraform_action == 'destroy'
         run: |
           if [ "${{ inputs.confirm_destroy }}" != "DESTROY" ]; then
             echo "Destroy bloque: renseigne confirm_destroy=DESTROY"
             exit 1
           fi
 
-      - name: Terraform Destroy
-        if: inputs.terraform_action == 'destroy'
-        run: terraform destroy -auto-approve ${{ steps.args.outputs.var_file_arg }}
+      - name: Validate backend secrets
+        run: |
+          test -n "$TFSTATE_RESOURCE_GROUP_NAME" || { echo "Missing secret TFSTATE_RESOURCE_GROUP_NAME"; exit 1; }
+          test -n "$TFSTATE_STORAGE_ACCOUNT_NAME" || { echo "Missing secret TFSTATE_STORAGE_ACCOUNT_NAME"; exit 1; }
+          test -n "$TFSTATE_CONTAINER_NAME" || { echo "Missing secret TFSTATE_CONTAINER_NAME"; exit 1; }
+          test -n "$TFSTATE_KEY" || { echo "Missing secret TFSTATE_KEY"; exit 1; }
+
+      - name: Terraform Init
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${TFSTATE_RESOURCE_GROUP_NAME}" \
+            -backend-config="storage_account_name=${TFSTATE_STORAGE_ACCOUNT_NAME}" \
+            -backend-config="container_name=${TFSTATE_CONTAINER_NAME}" \
+            -backend-config="key=${TFSTATE_KEY}"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Import existing bootstrap resources
+        run: |
+          rg_id="/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${TFSTATE_RESOURCE_GROUP_NAME}"
+          sa_id="/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${TFSTATE_RESOURCE_GROUP_NAME}/providers/Microsoft.Storage/storageAccounts/${TFSTATE_STORAGE_ACCOUNT_NAME}"
+          container_id="https://${TFSTATE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${TFSTATE_CONTAINER_NAME}"
+          sa_suffix="${TFSTATE_STORAGE_ACCOUNT_NAME##*tfstate}"
+
+          if ! terraform state list | grep -qx 'azurerm_resource_group.rg'; then
+            terraform import azurerm_resource_group.rg "$rg_id"
+          fi
+
+          if ! terraform state list | grep -qx 'azurerm_storage_account.tfstate'; then
+            terraform import azurerm_storage_account.tfstate "$sa_id"
+          fi
+
+          if ! terraform state list | grep -qx 'azurerm_storage_container.tfstate'; then
+            terraform import azurerm_storage_container.tfstate "$container_id"
+          fi
+
+          if ! terraform state list | grep -qx 'random_string.tfstate_sa_suffix'; then
+            terraform import random_string.tfstate_sa_suffix "$sa_suffix"
+          fi
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+
+      - name: Terraform Apply Destroy Plan
+        run: terraform apply -auto-approve tfplan
 
       - name: Upload errored state artifact
-        if: failure() && inputs.terraform_action == 'destroy'
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: terraform-errored-state

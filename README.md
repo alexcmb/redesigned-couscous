@@ -168,17 +168,25 @@ Le tfstate contient toujours la ressource `tls_private_key`, donc le Key Vault s
 
 ## Déploiements avec GitHub Actions
 
-Le workflow [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml) fonctionne maintenant en 3 modes :
+Le workflow [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml) est découplé en plusieurs stages :
 
 - `pull_request` : `fmt`, `validate`, `tflint`
-- `push` sur `master` ou `dev` : déploiement automatique (`plan` puis `apply`)
-- `workflow_dispatch` : exécution manuelle de `plan`, `apply` ou `destroy`
+- `plan` : calcule le plan et publie `tfplan` en artifact
+- `apply` : télécharge `tfplan` puis applique, avec approbation manuelle via l’environnement `terraform-apply`
+- `destroy` : calcule un plan de destruction, puis attend l’approbation manuelle via l’environnement `terraform-destroy`
 
-Pour que le déploiement automatique fonctionne, ajoute bien les secrets backend et Azure décrits plus haut dans ton repository GitHub.
+Pour que le workflow fonctionne, ajoute bien les secrets backend et Azure décrits plus haut dans ton repository GitHub.
+
+Crée aussi deux GitHub Environments avec reviewers requis :
+
+- `terraform-apply`
+- `terraform-destroy`
+
+Le stage `plan` s’exécute d’abord, puis le job suivant attend la validation manuelle de l’environnement concerné avant de lancer `apply` ou l’exécution du plan de destruction.
 
 La branche `dev` sert de branche de test pour valider les changements avant de les fusionner dans `master`.
 
-Si tu veux éviter un `apply` automatique sur `master`, garde le workflow manuel `workflow_dispatch` et retire le job `terraform_deploy`.
+Si tu veux uniquement tester le plan sans appliquer, lance le workflow en `workflow_dispatch` avec `terraform_action = plan`.
 
 ## Structure du projet
 
