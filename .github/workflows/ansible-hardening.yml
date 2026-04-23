@@ -1,0 +1,99 @@
+name: ansible-hardening
+
+on:
+  workflow_run:
+    workflows:
+      - terraform
+    types:
+      - completed
+    branches:
+      - master
+      - dev
+
+concurrency:
+  group: ansible-hardening-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  harden_vms:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.event == 'push' ||
+       github.event.workflow_run.display_title == 'terraform - apply')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: .
+    env:
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+      TFSTATE_RESOURCE_GROUP_NAME: ${{ secrets.TFSTATE_RESOURCE_GROUP_NAME }}
+      TFSTATE_STORAGE_ACCOUNT_NAME: ${{ secrets.TFSTATE_STORAGE_ACCOUNT_NAME }}
+      TFSTATE_CONTAINER_NAME: ${{ secrets.TFSTATE_CONTAINER_NAME }}
+      TFSTATE_KEY: ${{ secrets.TFSTATE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible jq
+
+      - name: Validate backend secrets
+        run: |
+          test -n "$TFSTATE_RESOURCE_GROUP_NAME" || { echo "Missing secret TFSTATE_RESOURCE_GROUP_NAME"; exit 1; }
+          test -n "$TFSTATE_STORAGE_ACCOUNT_NAME" || { echo "Missing secret TFSTATE_STORAGE_ACCOUNT_NAME"; exit 1; }
+          test -n "$TFSTATE_CONTAINER_NAME" || { echo "Missing secret TFSTATE_CONTAINER_NAME"; exit 1; }
+          test -n "$TFSTATE_KEY" || { echo "Missing secret TFSTATE_KEY"; exit 1; }
+
+      - name: Terraform Init
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${TFSTATE_RESOURCE_GROUP_NAME}" \
+            -backend-config="storage_account_name=${TFSTATE_STORAGE_ACCOUNT_NAME}" \
+            -backend-config="container_name=${TFSTATE_CONTAINER_NAME}" \
+            -backend-config="key=${TFSTATE_KEY}"
+
+      - name: Build Ansible inventory
+        run: |
+          control_plane_ip="$(terraform output -raw control_plane_public_ip)"
+          worker_ips="$(terraform output -json worker_public_ips | jq -r '.[]?')"
+          admin_user="$(terraform output -raw admin_username)"
+          ssh_key_file="${PWD}/id_rsa_k8s"
+
+          terraform output -raw ssh_private_key > "$ssh_key_file"
+          chmod 600 "$ssh_key_file"
+
+          {
+            printf '[cluster]\n'
+            printf 'control-plane ansible_host=%s\n' "$control_plane_ip"
+
+            index=1
+            while IFS= read -r worker_ip; do
+              [ -n "$worker_ip" ] || continue
+              printf 'worker-%s ansible_host=%s\n' "$index" "$worker_ip"
+              index=$((index + 1))
+            done <<< "$worker_ips"
+
+            printf '\n[cluster:vars]\n'
+            printf 'ansible_user=%s\n' "$admin_user"
+            printf 'ansible_ssh_private_key_file=%s\n' "$ssh_key_file"
+            printf 'ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null\n'
+          } > inventory.ini
+
+      - name: Run hardening playbook
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: 'False'
+        run: |
+          ansible-playbook -i inventory.ini ansible/playbooks/harden-vms.yml

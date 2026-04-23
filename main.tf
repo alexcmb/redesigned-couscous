@@ -1,6 +1,8 @@
 terraform {
   required_version = ">= 1.5"
 
+  backend "azurerm" {}
+
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
@@ -18,7 +20,11 @@ terraform {
 }
 
 provider "azurerm" {
-  features {}
+  features {
+    virtual_machine {
+      skip_shutdown_and_force_delete = true
+    }
+  }
 }
 
 resource "azurerm_resource_group" "rg" {

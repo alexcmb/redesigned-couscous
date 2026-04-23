@@ -52,6 +52,10 @@ Le workflow Terraform utilise ces secrets GitHub :
 - `ARM_CLIENT_SECRET`
 - `ARM_SUBSCRIPTION_ID`
 - `ARM_TENANT_ID`
+- `TFSTATE_RESOURCE_GROUP_NAME`
+- `TFSTATE_STORAGE_ACCOUNT_NAME`
+- `TFSTATE_CONTAINER_NAME`
+- `TFSTATE_KEY`
 
 Ajout dans GitHub : `Settings > Secrets and variables > Actions > New repository secret`.
 
@@ -103,6 +107,90 @@ az ad app credential reset --id <APP_ID> --display-name "github-actions" --appen
 ```
 
 La sortie contient `password` : c'est la valeur de `ARM_CLIENT_SECRET`.
+
+### Secrets backend tfstate (Azure Blob)
+
+Ces valeurs permettent au pipeline GitHub Actions de reutiliser le meme tfstate distant :
+
+- `TFSTATE_RESOURCE_GROUP_NAME`: nom du Resource Group qui contient le Storage Account
+- `TFSTATE_STORAGE_ACCOUNT_NAME`: nom du Storage Account
+- `TFSTATE_CONTAINER_NAME`: nom du container blob (ex: `tfstate`)
+- `TFSTATE_KEY`: nom de l'objet state (ex: `k8s/terraform.tfstate`)
+
+Tu peux recuperer les 3 premiers avec Terraform (apres creation des ressources backend) :
+
+```bash
+terraform output -raw tfstate_resource_group_name
+terraform output -raw tfstate_storage_account_name
+terraform output -raw tfstate_container_name
+```
+
+`TFSTATE_KEY` est libre, choisis une valeur stable par environnement.
+
+### Migration one-shot du state local vers backend distant
+
+Une fois le storage cree, execute une fois en local :
+
+```bash
+terraform init -migrate-state \
+  -backend-config="resource_group_name=<TFSTATE_RESOURCE_GROUP_NAME>" \
+  -backend-config="storage_account_name=<TFSTATE_STORAGE_ACCOUNT_NAME>" \
+  -backend-config="container_name=<TFSTATE_CONTAINER_NAME>" \
+  -backend-config="key=<TFSTATE_KEY>"
+```
+
+Apres cette migration, GitHub Actions et ton poste local partageront le meme tfstate.
+
+### Clé SSH dans Azure Key Vault
+
+La clé privée SSH générée par Terraform est aussi stockée dans un Key Vault Azure dédié.
+
+Tu peux récupérer les valeurs utiles avec Terraform :
+
+```bash
+terraform output -raw ssh_key_vault_name
+terraform output -raw ssh_private_key_secret_name
+```
+
+Pour exporter la clé en local :
+
+```bash
+az keyvault secret show \
+  --vault-name "<KEY_VAULT_NAME>" \
+  --name "ssh-private-key" \
+  --query value -o tsv > ~/.ssh/id_rsa_k8s
+chmod 600 ~/.ssh/id_rsa_k8s
+```
+
+Avec GitHub Actions, le même Service Principal utilisé pour Terraform peut lire ce secret si le workflow s'authentifie avec les secrets `ARM_*`.
+
+Le tfstate contient toujours la ressource `tls_private_key`, donc le Key Vault sert surtout à éviter de dépendre du state pour consommer la clé côté CI/CD.
+
+## Déploiements avec GitHub Actions
+
+Le workflow [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml) est découplé en plusieurs stages :
+
+- `pull_request` : `fmt`, `validate`, `tflint`
+- `plan` : calcule le plan et publie `tfplan` en artifact
+- `apply` : télécharge `tfplan` puis applique, avec approbation manuelle via l’environnement `terraform-apply`
+- `destroy` : calcule un plan de destruction, puis attend l’approbation manuelle via l’environnement `terraform-destroy`
+
+Pour que le workflow fonctionne, ajoute bien les secrets backend et Azure décrits plus haut dans ton repository GitHub.
+
+Crée aussi deux GitHub Environments avec reviewers requis :
+
+- `terraform-apply`
+- `terraform-destroy`
+
+Le stage `plan` s’exécute d’abord, puis le job suivant attend la validation manuelle de l’environnement concerné avant de lancer `apply` ou l’exécution du plan de destruction.
+
+La branche `dev` sert de branche de test pour valider les changements avant de les fusionner dans `master`.
+
+Si tu veux uniquement tester le plan sans appliquer, lance le workflow en `workflow_dispatch` avec `terraform_action = plan`.
+
+Une fois le workflow Terraform terminé avec succès sur `push` ou `apply`, un second workflow [`.github/workflows/ansible-hardening.yml`](.github/workflows/ansible-hardening.yml) s’exécute automatiquement.
+Il installe Ansible sur le runner, reconstruit un inventaire temporaire à partir des outputs Terraform, puis lance le playbook [ansible/playbooks/harden-vms.yml](ansible/playbooks/harden-vms.yml).
+Ce playbook reprend la logique du script [scripts/harden-node.sh](scripts/harden-node.sh) pour installer `fail2ban`, `auditd` et durcir `sshd` sur les VMs déjà créées.
 
 ## Structure du projet
 

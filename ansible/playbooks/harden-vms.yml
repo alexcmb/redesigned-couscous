@@ -1,0 +1,84 @@
+---
+- name: Harden Azure VMs
+  hosts: cluster
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Wait for SSH to become available
+      ansible.builtin.wait_for_connection:
+        delay: 5
+        timeout: 300
+
+  tasks:
+    - name: Install hardening packages
+      ansible.builtin.apt:
+        name:
+          - fail2ban
+          - auditd
+          - audispd-plugins
+        state: present
+        update_cache: true
+
+    - name: Configure fail2ban for sshd
+      ansible.builtin.copy:
+        dest: /etc/fail2ban/jail.d/sshd.local
+        mode: '0644'
+        content: |
+          [sshd]
+          enabled = true
+          backend = systemd
+          mode = aggressive
+          maxretry = 5
+          findtime = 10m
+          bantime = 1h
+      notify:
+        - Restart fail2ban
+
+    - name: Harden sshd configuration
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?{{ item.key }}\s+.*$'
+        line: '{{ item.key }} {{ item.value }}'
+        create: false
+      loop:
+        - { key: 'PermitRootLogin', value: 'no' }
+        - { key: 'PasswordAuthentication', value: 'no' }
+        - { key: 'KbdInteractiveAuthentication', value: 'no' }
+        - { key: 'PubkeyAuthentication', value: 'yes' }
+      notify:
+        - Validate ssh configuration
+        - Restart ssh
+
+    - name: Enable and restart auditd
+      ansible.builtin.systemd:
+        name: auditd
+        enabled: true
+        state: restarted
+
+    - name: Apply pending handlers
+      ansible.builtin.meta: flush_handlers
+
+    - name: Reset SSH connection after restart
+      ansible.builtin.meta: reset_connection
+
+    - name: Wait for SSH after hardening
+      ansible.builtin.wait_for_connection:
+        delay: 5
+        timeout: 300
+
+  handlers:
+    - name: Validate ssh configuration
+      ansible.builtin.command: sshd -t
+
+    - name: Restart fail2ban
+      ansible.builtin.systemd:
+        name: fail2ban
+        enabled: true
+        state: restarted
+
+    - name: Restart ssh
+      ansible.builtin.command: systemctl restart ssh
+      async: 45
+      poll: 0
+      changed_when: true
