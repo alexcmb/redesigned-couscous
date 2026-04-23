@@ -1,0 +1,194 @@
+---
+- name: Prepare Kubernetes prerequisites
+  hosts: cluster
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Disable swap immediately
+      ansible.builtin.command: swapoff -a
+      changed_when: false
+
+    - name: Disable swap in fstab
+      ansible.builtin.replace:
+        path: /etc/fstab
+        regexp: '^(.*\sswap\s+.*)$'
+        replace: '# \1'
+
+    - name: Ensure kernel modules file for Kubernetes
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/k8s.conf
+        mode: '0644'
+        content: |
+          overlay
+          br_netfilter
+
+    - name: Load required kernel modules
+      ansible.builtin.command: modprobe {{ item }}
+      loop:
+        - overlay
+        - br_netfilter
+      changed_when: false
+
+    - name: Ensure sysctl config for Kubernetes networking
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/k8s.conf
+        mode: '0644'
+        content: |
+          net.ipv4.ip_forward = 1
+          net.bridge.bridge-nf-call-iptables = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+
+    - name: Apply sysctl settings
+      ansible.builtin.command: sysctl --system
+      changed_when: false
+
+    - name: Install base packages
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - containerd
+        state: present
+        update_cache: true
+
+    - name: Generate default containerd config if missing
+      ansible.builtin.shell: |
+        if [ ! -f /etc/containerd/config.toml ]; then
+          containerd config default >/etc/containerd/config.toml
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Set SystemdCgroup for containerd
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+
+    - name: Configure crictl endpoint
+      ansible.builtin.copy:
+        dest: /etc/crictl.yaml
+        mode: '0644'
+        content: |
+          runtime-endpoint: unix:///run/containerd/containerd.sock
+          image-endpoint: unix:///run/containerd/containerd.sock
+          timeout: 10
+          debug: false
+
+    - name: Restart and enable containerd
+      ansible.builtin.systemd:
+        name: containerd
+        enabled: true
+        state: restarted
+
+    - name: Ensure Kubernetes apt keyring directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Install Kubernetes apt keyring
+      ansible.builtin.shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        executable: /bin/bash
+
+    - name: Configure Kubernetes apt repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        mode: '0644'
+        content: |
+          deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /
+
+    - name: Install Kubernetes components
+      ansible.builtin.apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        update_cache: true
+
+    - name: Hold Kubernetes packages
+      ansible.builtin.command: apt-mark hold kubelet kubeadm kubectl
+      changed_when: false
+
+    - name: Enable kubelet service
+      ansible.builtin.systemd:
+        name: kubelet
+        enabled: true
+        state: started
+
+    - name: Wait for CRI endpoint
+      ansible.builtin.command: crictl info
+      register: crictl_status
+      retries: 12
+      delay: 5
+      until: crictl_status.rc == 0
+      changed_when: false
+
+- name: Bootstrap Kubernetes control plane
+  hosts: control_plane
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Check if control plane already initialized
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: cp_admin_conf
+
+    - name: Initialize control plane
+      ansible.builtin.command: >-
+        kubeadm init
+        --token {{ kubeadm_token }}
+        --token-ttl 0
+        --pod-network-cidr={{ pod_network_cidr }}
+        --apiserver-advertise-address={{ ansible_default_ipv4.address }}
+        --cri-socket=unix:///run/containerd/containerd.sock
+      when: not cp_admin_conf.stat.exists
+
+    - name: Configure kubectl for admin user
+      ansible.builtin.shell: |
+        mkdir -p /home/{{ ansible_user }}/.kube
+        cp /etc/kubernetes/admin.conf /home/{{ ansible_user }}/.kube/config
+        chown -R {{ ansible_user }}:{{ ansible_user }} /home/{{ ansible_user }}/.kube
+      args:
+        executable: /bin/bash
+
+    - name: Install Flannel CNI
+      ansible.builtin.command: >-
+        kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f
+        https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
+      changed_when: false
+
+    - name: Generate worker join command
+      ansible.builtin.command: kubeadm token create --print-join-command
+      register: worker_join_cmd
+      changed_when: false
+
+    - name: Store worker join command for other plays
+      ansible.builtin.set_fact:
+        kubeadm_worker_join_command: "{{ worker_join_cmd.stdout }} --cri-socket=unix:///run/containerd/containerd.sock"
+      delegate_to: localhost
+      delegate_facts: true
+
+- name: Join worker nodes
+  hosts: workers
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Check if worker already joined
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: worker_kubelet_conf
+
+    - name: Join worker to cluster
+      ansible.builtin.command: "{{ hostvars['localhost'].kubeadm_worker_join_command }}"
+      when: not worker_kubelet_conf.stat.exists

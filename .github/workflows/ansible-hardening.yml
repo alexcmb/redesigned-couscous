@@ -70,14 +70,18 @@ jobs:
           control_plane_ip="$(terraform output -raw control_plane_public_ip)"
           worker_ips="$(terraform output -json worker_public_ips | jq -r '.[]?')"
           admin_user="$(terraform output -raw admin_username)"
+          kubeadm_token="$(terraform output -raw kubeadm_token)"
+          pod_network_cidr="$(terraform output -raw pod_network_cidr)"
           ssh_key_file="${PWD}/id_rsa_k8s"
 
           terraform output -raw ssh_private_key > "$ssh_key_file"
           chmod 600 "$ssh_key_file"
 
           {
-            printf '[cluster]\n'
+            printf '[control_plane]\n'
             printf 'control-plane ansible_host=%s\n' "$control_plane_ip"
+
+            printf '\n[workers]\n'
 
             index=1
             while IFS= read -r worker_ip; do
@@ -86,11 +90,23 @@ jobs:
               index=$((index + 1))
             done <<< "$worker_ips"
 
+            printf '\n[cluster:children]\n'
+            printf 'control_plane\n'
+            printf 'workers\n'
+
             printf '\n[cluster:vars]\n'
             printf 'ansible_user=%s\n' "$admin_user"
             printf 'ansible_ssh_private_key_file=%s\n' "$ssh_key_file"
             printf 'ansible_ssh_common_args=-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null\n'
+            printf 'kubeadm_token=%s\n' "$kubeadm_token"
+            printf 'pod_network_cidr=%s\n' "$pod_network_cidr"
           } > inventory.ini
+
+      - name: Run Kubernetes bootstrap playbook
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: 'False'
+        run: |
+          ansible-playbook -i inventory.ini ansible/playbooks/bootstrap-k8s.yml
 
       - name: Run hardening playbook
         env:

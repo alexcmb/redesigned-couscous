@@ -45,6 +45,11 @@ output "kubeadm_token" {
   sensitive   = true
 }
 
+output "pod_network_cidr" {
+  description = "CIDR du reseau Pod Kubernetes"
+  value       = var.pod_network_cidr
+}
+
 output "kubeadm_join_command" {
   description = "Commande kubeadm join pour ajouter un noeud manuellement"
   value       = "kubeadm join ${azurerm_network_interface.cp_nic.private_ip_address}:6443 --token ${local.kubeadm_token} --discovery-token-unsafe-skip-ca-verification"
