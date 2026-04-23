@@ -84,9 +84,7 @@ jobs:
               [ -n "$worker_ip" ] || continue
               printf 'worker-%s ansible_host=%s\n' "$index" "$worker_ip"
               index=$((index + 1))
-            done <<EOF
-$worker_ips
-EOF
+            done <<< "$worker_ips"
 
             printf '\n[cluster:vars]\n'
             printf 'ansible_user=%s\n' "$admin_user"
