@@ -20,6 +20,7 @@ resource "azurerm_storage_account" "tfstate" {
 
   lifecycle {
     prevent_destroy = true
+    ignore_changes  = [name]
   }
 }
 
