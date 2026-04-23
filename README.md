@@ -52,6 +52,10 @@ Le workflow Terraform utilise ces secrets GitHub :
 - `ARM_CLIENT_SECRET`
 - `ARM_SUBSCRIPTION_ID`
 - `ARM_TENANT_ID`
+- `TFSTATE_RESOURCE_GROUP_NAME`
+- `TFSTATE_STORAGE_ACCOUNT_NAME`
+- `TFSTATE_CONTAINER_NAME`
+- `TFSTATE_KEY`
 
 Ajout dans GitHub : `Settings > Secrets and variables > Actions > New repository secret`.
 
@@ -103,6 +107,53 @@ az ad app credential reset --id <APP_ID> --display-name "github-actions" --appen
 ```
 
 La sortie contient `password` : c'est la valeur de `ARM_CLIENT_SECRET`.
+
+### Secrets backend tfstate (Azure Blob)
+
+Ces valeurs permettent au pipeline GitHub Actions de reutiliser le meme tfstate distant :
+
+- `TFSTATE_RESOURCE_GROUP_NAME`: nom du Resource Group qui contient le Storage Account
+- `TFSTATE_STORAGE_ACCOUNT_NAME`: nom du Storage Account
+- `TFSTATE_CONTAINER_NAME`: nom du container blob (ex: `tfstate`)
+- `TFSTATE_KEY`: nom de l'objet state (ex: `k8s/terraform.tfstate`)
+
+Tu peux recuperer les 3 premiers avec Terraform (apres creation des ressources backend) :
+
+```bash
+terraform output -raw tfstate_resource_group_name
+terraform output -raw tfstate_storage_account_name
+terraform output -raw tfstate_container_name
+```
+
+`TFSTATE_KEY` est libre, choisis une valeur stable par environnement.
+
+### Migration one-shot du state local vers backend distant
+
+Une fois le storage cree, execute une fois en local :
+
+```bash
+terraform init -migrate-state \
+  -backend-config="resource_group_name=<TFSTATE_RESOURCE_GROUP_NAME>" \
+  -backend-config="storage_account_name=<TFSTATE_STORAGE_ACCOUNT_NAME>" \
+  -backend-config="container_name=<TFSTATE_CONTAINER_NAME>" \
+  -backend-config="key=<TFSTATE_KEY>"
+```
+
+Apres cette migration, GitHub Actions et ton poste local partageront le meme tfstate.
+
+## Déploiements avec GitHub Actions
+
+Le workflow [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml) fonctionne maintenant en 3 modes :
+
+- `pull_request` : `fmt`, `validate`, `tflint`
+- `push` sur `master` ou `dev` : déploiement automatique (`plan` puis `apply`)
+- `workflow_dispatch` : exécution manuelle de `plan`, `apply` ou `destroy`
+
+Pour que le déploiement automatique fonctionne, ajoute bien les secrets backend et Azure décrits plus haut dans ton repository GitHub.
+
+La branche `dev` sert de branche de test pour valider les changements avant de les fusionner dans `master`.
+
+Si tu veux éviter un `apply` automatique sur `master`, garde le workflow manuel `workflow_dispatch` et retire le job `terraform_deploy`.
 
 ## Structure du projet
 

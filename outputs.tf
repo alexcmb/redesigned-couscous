@@ -40,3 +40,18 @@ output "kubeadm_join_command" {
   value       = "kubeadm join ${azurerm_network_interface.cp_nic.private_ip_address}:6443 --token ${local.kubeadm_token} --discovery-token-unsafe-skip-ca-verification"
   sensitive   = true
 }
+
+output "tfstate_resource_group_name" {
+  description = "Resource group du backend Terraform"
+  value       = azurerm_resource_group.rg.name
+}
+
+output "tfstate_storage_account_name" {
+  description = "Storage Account qui stocke le tfstate"
+  value       = azurerm_storage_account.tfstate.name
+}
+
+output "tfstate_container_name" {
+  description = "Container Blob qui stocke le tfstate"
+  value       = azurerm_storage_container.tfstate.name
+}

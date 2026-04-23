@@ -10,6 +10,7 @@ on:
   push:
     branches:
       - master
+      - dev
     paths:
       - "*.tf"
       - "cloud-init/**"
@@ -83,6 +84,57 @@ jobs:
           tflint --init
           tflint -f compact
 
+  terraform_deploy:
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/dev')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: .
+    env:
+      TF_IN_AUTOMATION: true
+      TF_INPUT: false
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+      TFSTATE_RESOURCE_GROUP_NAME: ${{ secrets.TFSTATE_RESOURCE_GROUP_NAME }}
+      TFSTATE_STORAGE_ACCOUNT_NAME: ${{ secrets.TFSTATE_STORAGE_ACCOUNT_NAME }}
+      TFSTATE_CONTAINER_NAME: ${{ secrets.TFSTATE_CONTAINER_NAME }}
+      TFSTATE_KEY: ${{ secrets.TFSTATE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Validate backend secrets
+        run: |
+          test -n "$TFSTATE_RESOURCE_GROUP_NAME" || { echo "Missing secret TFSTATE_RESOURCE_GROUP_NAME"; exit 1; }
+          test -n "$TFSTATE_STORAGE_ACCOUNT_NAME" || { echo "Missing secret TFSTATE_STORAGE_ACCOUNT_NAME"; exit 1; }
+          test -n "$TFSTATE_CONTAINER_NAME" || { echo "Missing secret TFSTATE_CONTAINER_NAME"; exit 1; }
+          test -n "$TFSTATE_KEY" || { echo "Missing secret TFSTATE_KEY"; exit 1; }
+
+      - name: Terraform Init
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${TFSTATE_RESOURCE_GROUP_NAME}" \
+            -backend-config="storage_account_name=${TFSTATE_STORAGE_ACCOUNT_NAME}" \
+            -backend-config="container_name=${TFSTATE_CONTAINER_NAME}" \
+            -backend-config="key=${TFSTATE_KEY}"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+
   terraform_pipeline:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -97,6 +149,10 @@ jobs:
       ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
       ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
       ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+      TFSTATE_RESOURCE_GROUP_NAME: ${{ secrets.TFSTATE_RESOURCE_GROUP_NAME }}
+      TFSTATE_STORAGE_ACCOUNT_NAME: ${{ secrets.TFSTATE_STORAGE_ACCOUNT_NAME }}
+      TFSTATE_CONTAINER_NAME: ${{ secrets.TFSTATE_CONTAINER_NAME }}
+      TFSTATE_KEY: ${{ secrets.TFSTATE_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -106,8 +162,20 @@ jobs:
         with:
           terraform_wrapper: false
 
+      - name: Validate backend secrets
+        run: |
+          test -n "$TFSTATE_RESOURCE_GROUP_NAME" || { echo "Missing secret TFSTATE_RESOURCE_GROUP_NAME"; exit 1; }
+          test -n "$TFSTATE_STORAGE_ACCOUNT_NAME" || { echo "Missing secret TFSTATE_STORAGE_ACCOUNT_NAME"; exit 1; }
+          test -n "$TFSTATE_CONTAINER_NAME" || { echo "Missing secret TFSTATE_CONTAINER_NAME"; exit 1; }
+          test -n "$TFSTATE_KEY" || { echo "Missing secret TFSTATE_KEY"; exit 1; }
+
       - name: Terraform Init
-        run: terraform init -input=false
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${TFSTATE_RESOURCE_GROUP_NAME}" \
+            -backend-config="storage_account_name=${TFSTATE_STORAGE_ACCOUNT_NAME}" \
+            -backend-config="container_name=${TFSTATE_CONTAINER_NAME}" \
+            -backend-config="key=${TFSTATE_KEY}"
 
       - name: Terraform Validate
         run: terraform validate
